@@ -53,7 +53,7 @@ func (c *Config) ToServer(ctx context.Context, sqlCache bool) (*server.Server, e
 
 	return server.New(ctx, restConfig, &server.Options{
 		AuthMiddleware: auth,
-		Next:           ui.New(c.UIPath),
+		Next:           ui.New(c.UIPath, c.Offline),
 		SQLCache:       sqlCache,
 		SQLCacheFactoryOptions: factory.CacheFactoryOptions{
 			GCInterval:  15 * time.Minute,
