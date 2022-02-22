@@ -75,12 +75,6 @@ func New(path string, offline string) http.Handler {
 	router := mux.NewRouter()
 	router.UseEncodedPath()
 
-	router.Handle("/", http.RedirectHandler("/dashboard/", http.StatusFound))
-	router.Handle("/dashboard", http.RedirectHandler("/dashboard/", http.StatusFound))
-	router.Handle("/dashboard/", vue.IndexFile())
-	router.Handle("/favicon.png", vue.ServeFaviconDashboard())
-	router.Handle("/favicon.ico", vue.ServeFaviconDashboard())
-	router.PathPrefix("/dashboard/").Handler(vue.IndexFileOnNotFound())
 	router.PathPrefix("/k8s/clusters/local").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		url := strings.TrimPrefix(req.URL.Path, "/k8s/clusters/local")
 		if url == "" {
@@ -88,6 +82,28 @@ func New(path string, offline string) http.Handler {
 		}
 		http.Redirect(rw, req, url, http.StatusFound)
 	})
+
+	router.PathPrefix("/v1/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		url := strings.TrimPrefix(req.URL.Path, "/v1/")
+		if url == "" {
+			url = "/"
+		}
+		http.Redirect(rw, req, url, http.StatusFound)
+	})
+
+	router.PathPrefix("/v3/").HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		url := strings.TrimPrefix(req.URL.Path, "/v3/settings/")
+		if url == "" {
+			url = "/"
+		}
+		http.Redirect(rw, req, url, http.StatusNotFound)
+	})
+
+	spa := spaHandler{staticPath: path, indexPath: "index.html"}
+	router.Handle("/dashboard", http.RedirectHandler("/dashboard/", http.StatusFound))
+	router.Handle("/dashboard/", vue.IndexFile())
+	router.PathPrefix("/").Handler(spa)
+	router.PathPrefix("/dashboard/").Handler(spa)
 
 	return router
 }
