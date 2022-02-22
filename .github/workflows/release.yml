@@ -1,0 +1,40 @@
+name: Build and Release Steve API
+
+on: 
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps: 
+    - uses: actions/setup-go@v2
+      with:
+        go-version: 1.17.x
+
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+        submodules: recursive
+        persist-credentials: false
+    
+    - name: Build Steve API
+      run: |
+        cd bin/
+        chmod +x build.sh
+        ./build.sh
+    
+    - name: Upload Build
+      uses: actions/upload-artifact@v2
+      with:
+        path: ./src/steve/release/*
+        if-no-files-found: error
+
+    - name: Upload Assets
+      uses: svenstaro/upload-release-action@v2
+      with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: ./src/steve/release/*
+        tag: ${{ github.ref }}
+        file_glob: true
