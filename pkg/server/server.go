@@ -358,6 +358,8 @@ func (c *Server) ListenAndServe(ctx context.Context, httpsPort, httpPort int, op
 		opts.Secrets = c.controllers.Core.Secret()
 	}
 
+	opts.BindHost = "127.0.0.1"
+
 	c.StartAggregation(ctx)
 
 	if len(opts.TLSListenerConfig.SANs) == 0 {
