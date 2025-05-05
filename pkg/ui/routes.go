@@ -24,7 +24,7 @@ type spaHandler struct {
 // is suitable behavior for serving an SPA (single page application).
 func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// get the absolute path to prevent directory traversal
-	path, err := filepath.Abs(r.URL.Path)
+	_, err := filepath.Abs(r.URL.Path)
 	if err != nil {
 		// if we failed to get the absolute path respond with a 400 bad request
 		// and stop
@@ -33,7 +33,7 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// prepend the path with the path to the static directory
-	path = filepath.Join(h.staticPath, r.URL.Path)
+	path := filepath.Join(h.staticPath, r.URL.Path)
 
 	// check whether a file exists at the given path
 	_, err = os.Stat(path)

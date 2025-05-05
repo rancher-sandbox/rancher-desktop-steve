@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/rancher/steve/pkg/stores/proxy"
-	"github.com/rancher/wrangler/pkg/condition"
-	"github.com/rancher/wrangler/pkg/randomtoken"
-	"github.com/rancher/wrangler/pkg/schemas/validation"
+	"github.com/rancher/wrangler/v3/pkg/condition"
+	"github.com/rancher/wrangler/v3/pkg/randomtoken"
+	"github.com/rancher/wrangler/v3/pkg/schemas/validation"
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -128,10 +128,10 @@ type PodOptions struct {
 // CreatePod will create a pod with a service account that impersonates as user. Corresponding
 // ClusterRoles, ClusterRoleBindings, and ServiceAccounts will be create.
 // IMPORTANT NOTES:
-//   1. To ensure this is used securely the namespace assigned to the pod must be a dedicated
-//      namespace used only for the purpose of running impersonated pods. This is to ensure
-//      proper protection for the service accounts created.
-//   2. The pod must KUBECONFIG env var set to where you expect the kubeconfig to reside
+//  1. To ensure this is used securely the namespace assigned to the pod must be a dedicated
+//     namespace used only for the purpose of running impersonated pods. This is to ensure
+//     proper protection for the service accounts created.
+//  2. The pod must KUBECONFIG env var set to where you expect the kubeconfig to reside
 func (s *PodImpersonation) CreatePod(ctx context.Context, user user.Info, pod *v1.Pod, podOptions *PodOptions) (*v1.Pod, error) {
 	if podOptions == nil {
 		podOptions = &PodOptions{}
@@ -512,10 +512,12 @@ func (s *PodImpersonation) adminKubeConfig(user user.Info, role *rbacv1.ClusterR
 
 func (s *PodImpersonation) augmentPod(pod *v1.Pod, sa *v1.ServiceAccount, secret *v1.Secret, imageOverride string) *v1.Pod {
 	var (
-		zero = int64(0)
-		t    = true
-		f    = false
-		m    = int32(420)
+		zero      = int64(0)
+		t         = true
+		f         = false
+		m         = int32(0o644)
+		m2        = int32(0o600)
+		shellUser = 1000
 	)
 
 	pod = pod.DeepCopy()
@@ -536,10 +538,17 @@ func (s *PodImpersonation) augmentPod(pod *v1.Pod, sa *v1.ServiceAccount, secret
 		v1.Volume{
 			Name: "user-kubeconfig",
 			VolumeSource: v1.VolumeSource{
+				EmptyDir: &v1.EmptyDirVolumeSource{},
+			},
+		},
+		v1.Volume{
+			Name: "user-kube-configmap",
+			VolumeSource: v1.VolumeSource{
 				ConfigMap: &v1.ConfigMapVolumeSource{
 					LocalObjectReference: v1.LocalObjectReference{
 						Name: s.userConfigName(),
 					},
+					DefaultMode: &m2,
 				},
 			},
 		},
@@ -553,25 +562,50 @@ func (s *PodImpersonation) augmentPod(pod *v1.Pod, sa *v1.ServiceAccount, secret
 			},
 		})
 
+	image := imageOverride
+	if image == "" {
+		image = s.imageName()
+	}
+
 	for i, container := range pod.Spec.Containers {
 		for _, envvar := range container.Env {
 			if envvar.Name != "KUBECONFIG" {
 				continue
 			}
 
+			//This mounts two volumes, one configMap and one emptyDir.
+			//The reason for this is that we need to change the permissions on the kubeconfig file
+			//and, since a configMap volume is always read-only, we need an emptyDir volume as well.
+			vmount := v1.VolumeMount{
+				Name:      "user-kubeconfig",
+				MountPath: "/tmp/.kube",
+			}
+			cfgVMount := v1.VolumeMount{
+				Name:      "user-kube-configmap",
+				MountPath: "/home/.kube/config",
+				SubPath:   "config",
+			}
+
+			pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
+				Name:            "init-kubeconfig-volume",
+				Image:           image,
+				Command:         []string{"sh", "-c", fmt.Sprintf("cp %s %s && chown %d %s/config", cfgVMount.MountPath, vmount.MountPath, shellUser, vmount.MountPath)},
+				ImagePullPolicy: v1.PullIfNotPresent,
+				SecurityContext: &v1.SecurityContext{
+					RunAsUser:  &zero,
+					RunAsGroup: &zero,
+				},
+				VolumeMounts: []v1.VolumeMount{cfgVMount, vmount},
+			},
+			)
+
 			pod.Spec.Containers[i].VolumeMounts = append(container.VolumeMounts, v1.VolumeMount{
 				Name:      "user-kubeconfig",
-				ReadOnly:  true,
 				MountPath: envvar.Value,
 				SubPath:   "config",
 			})
 			break
 		}
-	}
-
-	image := imageOverride
-	if image == "" {
-		image = s.imageName()
 	}
 
 	pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{

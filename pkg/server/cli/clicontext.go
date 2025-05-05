@@ -7,8 +7,8 @@ import (
 	authcli "github.com/rancher/steve/pkg/auth/cli"
 	"github.com/rancher/steve/pkg/server"
 	"github.com/rancher/steve/pkg/ui"
-	"github.com/rancher/wrangler/pkg/kubeconfig"
-	"github.com/rancher/wrangler/pkg/ratelimit"
+	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
+	"github.com/rancher/wrangler/v3/pkg/ratelimit"
 	"github.com/urfave/cli"
 )
 
@@ -24,14 +24,14 @@ type Config struct {
 }
 
 func (c *Config) MustServer(ctx context.Context) *server.Server {
-	cc, err := c.ToServer(ctx)
+	cc, err := c.ToServer(ctx, false)
 	if err != nil {
 		panic(err)
 	}
 	return cc
 }
 
-func (c *Config) ToServer(ctx context.Context) (*server.Server, error) {
+func (c *Config) ToServer(ctx context.Context, sqlCache bool) (*server.Server, error) {
 	var (
 		auth steveauth.Middleware
 	)
@@ -52,6 +52,7 @@ func (c *Config) ToServer(ctx context.Context) (*server.Server, error) {
 	return server.New(ctx, restConfig, &server.Options{
 		AuthMiddleware: auth,
 		Next:           ui.New(c.UIPath, c.Offline),
+		SQLCache:       sqlCache,
 	})
 }
 

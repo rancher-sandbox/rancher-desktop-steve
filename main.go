@@ -6,7 +6,7 @@ import (
 	"github.com/rancher/steve/pkg/debug"
 	stevecli "github.com/rancher/steve/pkg/server/cli"
 	"github.com/rancher/steve/pkg/version"
-	"github.com/rancher/wrangler/pkg/signals"
+	"github.com/rancher/wrangler/v3/pkg/signals"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
@@ -34,7 +34,7 @@ func main() {
 func run(_ *cli.Context) error {
 	ctx := signals.SetupSignalContext()
 	debugconfig.MustSetupDebug()
-	s, err := config.ToServer(ctx)
+	s, err := config.ToServer(ctx, false)
 	if err != nil {
 		return err
 	}
