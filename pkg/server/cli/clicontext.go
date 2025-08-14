@@ -78,7 +78,7 @@ func Flags(config *Config) []cli.Flag {
 			Name:        "ui-path",
 			Destination: &config.UIPath,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "offline",
 			Value:       "dynamic",
 			Usage:       "Determine whether or not to run the UI offline, accepts values true/false/dynamic",
