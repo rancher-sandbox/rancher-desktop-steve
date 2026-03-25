@@ -9,11 +9,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps: 
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
       with:
         go-version: 1.24.x
 
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
         fetch-depth: 1
         submodules: recursive
@@ -26,7 +26,7 @@ jobs:
         ./build.sh
     
     - name: Upload Build
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         path: ./release/*
         if-no-files-found: error
