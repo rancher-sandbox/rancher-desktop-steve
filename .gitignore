@@ -1,7 +1,5 @@
-/.dapper
-/.cache
-/certs
-/dist
 *.swp
 .idea
-steve
+/dashboard/
+/dashboard.tgz
+/release/
