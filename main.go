@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	runtimedebug "runtime/debug"
 	"strings"
 	"time"
 
@@ -59,7 +60,6 @@ func run(_ *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	s.StartAggregation(ctx)
 
 	// Listen on a port on localhost.
 	localhost := net.IPv4(127, 0, 0, 1)
@@ -89,12 +89,13 @@ func run(_ *cli.Context) error {
 	logrus.Infof("Steve is listening on port %d", port)
 
 	// Set up the mux.
+	s.StartAggregation(ctx)
 	mux := http.NewServeMux()
-	// Set the the default handler, to use the steve APIs.
+	// Set up the default handler, to use the steve APIs.
 	mux.Handle("/", s)
-	// Set the a handler for the root, to redirect to the local cluster explorer.
+	// Set up a handler for the root, to redirect to the local cluster explorer.
 	mux.Handle("/{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/c/local/explorer", http.StatusMovedPermanently)
+		http.Redirect(w, r, "/c/local/explorer", http.StatusFound)
 	}))
 	// Set up a handler for any cluster explorer, which gets passed to the rewriter.
 	mux.Handle("/c/", rewriter)
@@ -104,13 +105,13 @@ func run(_ *cli.Context) error {
 	// steve API handler instead.
 	files, err := dashboardFiles.ReadDir("dashboard")
 	if err != nil {
-		return fmt.Errorf("could not read front end file: %w", err)
+		return fmt.Errorf("could not read front end files: %w", err)
 	}
 	for _, f := range files {
 		if f.IsDir() {
-			mux.Handle("/"+f.Name()+"/", http.HandlerFunc(rewriter))
+			mux.Handle("/"+f.Name()+"/", rewriter)
 		} else {
-			mux.Handle("/"+f.Name(), http.HandlerFunc(rewriter))
+			mux.Handle("/"+f.Name(), rewriter)
 		}
 	}
 	// Handle the steve-port API, which is no longer used.
@@ -148,6 +149,13 @@ func rewriteHandler(port int) (http.HandlerFunc, error) {
 	if _, ok := subFS.(fs.ReadFileFS); !ok {
 		return nil, fmt.Errorf("sub filesystem does not support ReadFile")
 	}
+	etag := ""
+	if buildInfo, ok := runtimedebug.ReadBuildInfo(); ok {
+		etag = buildInfo.Main.Sum
+	}
+	replacer := strings.NewReplacer(
+		"http://127.0.0.1:6120/",
+		fmt.Sprintf("http://127.0.0.1:%d/", port))
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Calculate the path inside the dashboard FS to serve.
 		actualPath := strings.TrimPrefix(r.URL.Path, "/")
@@ -156,10 +164,21 @@ func rewriteHandler(port int) (http.HandlerFunc, error) {
 			// a single-page application.
 			actualPath = "index.html"
 		}
-		mimeType := mime.TypeByExtension(path.Ext(actualPath))
-		if !strings.HasPrefix(mimeType, "text/") {
+		// Only rewrite HTML and JavaScript files; nothing else should contain
+		// the hard-coded port number.
+		switch path.Ext(actualPath) {
+		case ".html", ".js":
+		default:
 			// For non-text files, just serve them directly without rewriting.
 			http.FileServerFS(subFS).ServeHTTP(w, r)
+			return
+		}
+
+		if etag != "" && r.Header.Get("If-None-Match") == etag {
+			// The client has a good cache, so just tell it to use that.  This
+			// can only be true if the port number is correct (since the client
+			// would not have requested the resource otherwise).
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 
@@ -180,10 +199,10 @@ func rewriteHandler(port int) (http.HandlerFunc, error) {
 			}
 			return
 		}
-		w.Header().Set("Content-Type", mimeType)
-		replacer := strings.NewReplacer(
-			"http://127.0.0.1:6120/",
-			fmt.Sprintf("http://127.0.0.1:%d/", port))
+		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(actualPath)))
+		if etag != "" {
+			w.Header().Set("ETag", etag)
+		}
 		if _, err := replacer.WriteString(w, string(contents)); err != nil {
 			logrus.Errorf("could not write response: %v", err)
 		}
