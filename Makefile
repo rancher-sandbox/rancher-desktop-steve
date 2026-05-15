@@ -23,25 +23,30 @@ $(foreach p,$(PLATFORMS),$(eval $(call ARCHIVE_RULE,$(p))))
 # Define explicit rules for each executable, to handle the .exe suffix on
 # Windows.  Requires dashboard.
 GOLANG_SOURCES := $(shell find pkg -name '*.go') main.go go.mod go.sum
-# For release/steve-$(GOOS)-$(GOOARCH)
+# For release/steve-$(GOOS)-$(GOARCH)
 GOOS = $(firstword $(subst -, ,$(1)))
 GOARCH = $(lastword $(subst -, ,$(1)))
 define EXECUTABLE_RULE
 release/$(1)/steve$(call EXE_SUFFIX,$(1)): dashboard/index.html $$(GOLANG_SOURCES) $$(MAKEFILE_LIST)
 	mkdir -p "$$(@D)"
-	env GOOS=$(call GOOS,$(1)) GOARCH=$(call GOARCH,$(1)) go build  -ldflags '-s -w' -trimpath -o "$$@"
+	env GOOS=$(call GOOS,$(1)) GOARCH=$(call GOARCH,$(1)) CGO_ENABLED=0 \
+		go build -ldflags '-extldflags -static -s -w -X main.dashboardChecksum=$(DASHBOARD_CHECKSUM)' \
+			-trimpath -o "$$@"
 endef
 $(foreach p,$(PLATFORMS),$(eval $(call EXECUTABLE_RULE,$(p))))
 
 # The dashboard requires the downloaded dashboard archive.
-dashboard/index.html: dashboard.tgz
+dashboard/index.html: dashboard.tgz $(MAKEFILE_LIST)
+	echo "$(DASHBOARD_CHECKSUM)  $<" | sha512sum -c -
+	-rm -rf "$(@D)"
 	mkdir -p "$(@D)"
 	tar -xzf "$<" -C "$(@D)"
 
 # The dashboard archive is downloaded.
 dashboard.tgz:
-	wget -O "$@" "https://github.com/rancher-sandbox/rancher-desktop-dashboard/releases/download/desktop-$(DASHBOARD_VERSION)/rancher-dashboard-desktop-embed.tar.gz"
-	echo "$(DASHBOARD_CHECKSUM)  dashboard.tgz" | sha512sum -c -
+	wget --no-verbose --output-document "$@" \
+		"https://github.com/rancher-sandbox/rancher-desktop-dashboard/releases/download/desktop-$(DASHBOARD_VERSION)/rancher-dashboard-desktop-embed.tar.gz"
+	echo "$(DASHBOARD_CHECKSUM)  $@" | sha512sum -c -
 
 .PHONY: clean
 clean:

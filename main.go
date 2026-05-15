@@ -14,9 +14,9 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path"
-	runtimedebug "runtime/debug"
 	"strings"
 	"time"
 
@@ -42,15 +42,25 @@ func main() {
 	app.Version = version.FriendlyVersion()
 	app.Usage = "Rancher Desktop dashboard server"
 	app.Description = "This is part of Rancher Desktop 2.x and should not be run manually."
-	app.Flags = append(
-		stevecli.Flags(&config),
-		debug.Flags(&debugconfig)...)
+	app.Flags = debug.Flags(&debugconfig)
+	for _, flag := range stevecli.Flags(&config) {
+		switch flag.GetName() {
+		case "ui-path", "offline", "http-listen-port", "https-listen-port":
+			// These flags are not relevant to our use case, so ignore them.
+		default:
+			app.Flags = append(app.Flags, flag)
+		}
+	}
 	app.Action = run
 
 	if err := app.Run(os.Args); err != nil {
 		logrus.Fatal(err)
 	}
 }
+
+// dashboardChecksum is the checksum of the dashboard files, which is used for
+// cache invalidation.  This is set at build time.
+var dashboardChecksum string
 
 func run(_ *cli.Context) error {
 	// Set up steve; however, we do not tell it to listen by itself.
@@ -61,7 +71,7 @@ func run(_ *cli.Context) error {
 		return err
 	}
 
-	// Listen on a port on localhost.
+	// Listen on a port on localhost.  IPv4 only, to match the dashboard files.
 	localhost := net.IPv4(127, 0, 0, 1)
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: localhost, Port: 0})
 	if err != nil {
@@ -72,7 +82,11 @@ func run(_ *cli.Context) error {
 
 	// Set up the rewrite handler, to fix up source code that has hard-coded the
 	// default port number.
-	rewriter, err := rewriteHandler(port)
+	subFS, err := fs.Sub(dashboardFiles, "dashboard")
+	if err != nil {
+		return fmt.Errorf("could not create dashboard filesystem: %w", err)
+	}
+	rewriter, err := rewriteHandler(port, subFS, dashboardChecksum)
 	if err != nil {
 		return fmt.Errorf("could not set up rewrite handler: %w", err)
 	}
@@ -114,7 +128,8 @@ func run(_ *cli.Context) error {
 			mux.Handle("/"+f.Name(), rewriter)
 		}
 	}
-	// Handle the steve-port API, which is no longer used.
+	// Handle the steve-port API, which is no longer used.  We can get rid of
+	// this once the dashboard no longer requests it.
 	mux.Handle("/api/steve-port", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%d", port)
 	}))
@@ -122,10 +137,10 @@ func run(_ *cli.Context) error {
 	// Actually set up the HTTP server, plus a goroutine to shut down once the
 	// context is done.  Afterwards, start the server.
 	server := &http.Server{Handler: mux}
+	shutdownCh := make(chan struct{})
 	go func() {
+		defer close(shutdownCh)
 		<-ctx.Done()
-		// Wait some time for steve stuff to shut down
-		<-time.After(10 * time.Millisecond)
 		// Shutdown the HTTP server with a small timeout.
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -136,30 +151,31 @@ func run(_ *cli.Context) error {
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-shutdownCh // Wait for connections to be closed from `server.Shutdown`.
 	return nil
 }
 
 // Serve the request from static files, rewriting any instance of the default
 // port to the actual port number.
-func rewriteHandler(port int) (http.HandlerFunc, error) {
-	subFS, err := fs.Sub(dashboardFiles, "dashboard")
-	if err != nil {
-		return nil, fmt.Errorf("could not create sub filesystem: %w", err)
-	}
-	if _, ok := subFS.(fs.ReadFileFS); !ok {
-		return nil, fmt.Errorf("sub filesystem does not support ReadFile")
-	}
-	etag := ""
-	if buildInfo, ok := runtimedebug.ReadBuildInfo(); ok {
-		etag = buildInfo.Main.Sum
-	}
+func rewriteHandler(port int, files fs.FS, checksum string) (http.HandlerFunc, error) {
+	fileServer := http.FileServerFS(files)
+	etag := fmt.Sprintf(`W/"%s"`, checksum)
 	replacer := strings.NewReplacer(
-		"http://127.0.0.1:6120/",
-		fmt.Sprintf("http://127.0.0.1:%d/", port))
+		"://127.0.0.1:6120/",
+		fmt.Sprintf("://127.0.0.1:%d/", port))
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", etag)
+		if isNotModified(r.Header.Get("If-None-Match"), checksum) {
+			// The client has a good cache, so just tell it to use that.  This
+			// can only be true if the port number is correct (since the client
+			// would not have requested the resource otherwise).
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
 		// Calculate the path inside the dashboard FS to serve.
 		actualPath := strings.TrimPrefix(r.URL.Path, "/")
-		if _, err := subFS.Open(actualPath); errors.Is(err, fs.ErrNotExist) {
+		if stat, err := fs.Stat(files, actualPath); err != nil || stat.IsDir() {
 			// If the file does not exist, serve the index file because this is
 			// a single-page application.
 			actualPath = "index.html"
@@ -170,22 +186,14 @@ func rewriteHandler(port int) (http.HandlerFunc, error) {
 		case ".html", ".js":
 		default:
 			// For non-text files, just serve them directly without rewriting.
-			http.FileServerFS(subFS).ServeHTTP(w, r)
-			return
-		}
-
-		if etag != "" && r.Header.Get("If-None-Match") == etag {
-			// The client has a good cache, so just tell it to use that.  This
-			// can only be true if the port number is correct (since the client
-			// would not have requested the resource otherwise).
-			w.WriteHeader(http.StatusNotModified)
+			fileServer.ServeHTTP(w, r)
 			return
 		}
 
 		// This is a text file that needs rewriting; read it, replace any
 		// relevant strings, and serve it.  At the moment, embed.FS just stores
 		// the whole thing in memory anyway, so this should not be a problem.
-		contents, err := subFS.(fs.ReadFileFS).ReadFile(actualPath)
+		contents, err := fs.ReadFile(files, actualPath)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				// Since we munged actualPath above, this should only happen if
@@ -200,11 +208,23 @@ func rewriteHandler(port int) (http.HandlerFunc, error) {
 			return
 		}
 		w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(actualPath)))
-		if etag != "" {
-			w.Header().Set("ETag", etag)
-		}
 		if _, err := replacer.WriteString(w, string(contents)); err != nil {
 			logrus.Errorf("could not write response: %v", err)
 		}
 	}, nil
+}
+
+// Check if the request should be responded to with a 304 Not Modified.
+func isNotModified(ifNoneMatch, desiredTag string) bool {
+	for tag := range strings.SplitSeq(ifNoneMatch, ",") {
+		tag = textproto.TrimString(tag)
+		if tag == "*" {
+			return true
+		}
+		tag = strings.Trim(strings.TrimPrefix(tag, "W/"), `"`)
+		if tag == desiredTag {
+			return true
+		}
+	}
+	return false
 }
