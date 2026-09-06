@@ -1,7 +1,7 @@
 DASHBOARD_VERSION := v2.11.1.rd4
 DASHBOARD_CHECKSUM := 22839af7ae78f1c9dbf2559a0be8a6cd355426b6dc31795ce8fd86a4257d4d509778b07b4cee36088c0c5ec072e6c09e2d8e7bbb4d070d0b70cd2c158abfe668
 
-PLATFORMS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64
+PLATFORMS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 
 .DELETE_ON_ERROR:
 
